@@ -1,6 +1,6 @@
 """
 目标检测训练脚本
-支持 Faster R-CNN 系列模型
+支持 Faster R-CNN, DETR, YOLOv5 系列模型
 用法: python train.py --model fasterrcnn_resnet50 --epochs 20 --batch_size 4
 """
 
@@ -15,15 +15,31 @@ import torch
 import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
 
-from models import create_model, get_supported_models
+from models import create_model, get_supported_models, is_detr_model
 from data import get_voc_loaders
 
 
-def train_one_epoch(model, optimizer, data_loader, device, epoch):
+def compute_loss_from_output(output):
+    """
+    从模型输出中计算总 loss
+    兼容 Faster R-CNN (返回 dict of losses) 和 DETR (返回 dict with single 'loss')
+    """
+    if isinstance(output, dict):
+        if 'loss' in output:
+            # DETR 格式: {'loss': tensor}
+            return output['loss']
+        else:
+            # Faster R-CNN 格式: {'loss_classifier': ..., 'loss_box_reg': ..., etc.}
+            return sum(loss for loss in output.values())
+    else:
+        raise ValueError(f"不支持的输出格式: {type(output)}")
+
+
+def train_one_epoch(model, optimizer, data_loader, device, epoch, model_name=''):
     """
     训练一个 epoch
 
-    检测模型在训练时返回 losses 字典，不需要手动计算 loss
+    检测模型在训练时返回 losses，不需要手动计算 loss
     """
     model.train()
     total_loss = 0.0
@@ -35,8 +51,8 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch):
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
         # 前向传播（训练模式返回 losses）
-        loss_dict = model(images, targets)
-        losses = sum(loss for loss in loss_dict.values())
+        output = model(images, targets)
+        losses = compute_loss_from_output(output)
 
         # 检查 loss 是否异常
         if torch.isnan(losses) or torch.isinf(losses):
@@ -66,14 +82,21 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch):
 
 
 @torch.no_grad()
-def evaluate(model, data_loader, device):
+def evaluate(model, data_loader, device, model_name=''):
     """
     评估模型
 
     返回平均 loss（用于模型选择）
     注意：完整的 mAP 计算在 test.py 中实现
     """
-    model.train()  # 切换到 train 模式以获取 loss（torchvision 检测模型的特殊要求）
+    # 注意：DETR 和 torchvision 检测模型的评估方式不同
+    # DETR 在 eval 模式下也能返回 loss（如果提供 labels）
+    # torchvision 检测模型在 eval 模式下只返回预测结果，不返回 loss
+    # 因此对于 torchvision 模型，需要切回 train 模式来获取 loss
+    if not is_detr_model(model_name):
+        model.train()  # torchvision 检测模型需要在 train 模式下获取 loss
+    else:
+        model.train()  # DETR 也需要 train 模式来计算 loss
 
     total_loss = 0.0
     num_batches = 0
@@ -82,8 +105,8 @@ def evaluate(model, data_loader, device):
         images = [img.to(device) for img in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        loss_dict = model(images, targets)
-        losses = sum(loss for loss in loss_dict.values())
+        output = model(images, targets)
+        losses = compute_loss_from_output(output)
 
         if not (torch.isnan(losses) or torch.isinf(losses)):
             total_loss += losses.item()
@@ -191,10 +214,10 @@ def train(args):
         epoch_start = time.time()
 
         # --- 训练 ---
-        train_loss = train_one_epoch(model, optimizer, train_loader, device, epoch)
+        train_loss = train_one_epoch(model, optimizer, train_loader, device, epoch, model_name)
 
         # --- 验证 ---
-        val_loss = evaluate(model, val_loader, device)
+        val_loss = evaluate(model, val_loader, device, model_name)
 
         # --- 学习率调度 ---
         current_lr = optimizer.param_groups[0]['lr']
