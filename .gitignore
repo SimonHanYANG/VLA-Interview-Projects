@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Data files (not source code)
+**/data/VOCdevkit/
+**/data/*.tar
+*.zip
+
+# Model weights (not source code)
+*.pth
+*.pt
+*.ckpt
+*.bin
+
+# Training outputs
+**/results/*.json
+**/logs/
+**/runs/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Conda
+*.egg-info/
+dist/
+build/
