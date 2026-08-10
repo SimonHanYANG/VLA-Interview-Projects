@@ -284,6 +284,11 @@ def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"\n使用设备: {device}")
 
+    # 确保输出目录存在
+    os.makedirs('models', exist_ok=True)
+    os.makedirs('results', exist_ok=True)
+    os.makedirs('logs', exist_ok=True)
+
     # 创建 TensorBoard writer
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_dir = f"logs/{args.model}_{timestamp}"
