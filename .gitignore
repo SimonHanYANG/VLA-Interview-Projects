@@ -1,0 +1,31 @@
+# 数据集
+data/
+*.tar.gz
+*.zip
+
+# 模型权重
+models/
+*.pth
+*.pt
+*.ckpt
+
+# 训练日志
+logs/
+
+# 结果和输出
+results/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# 系统文件
+.DS_Store
+*.swp
+*.swo
+
+# IDE
+.vscode/
+.idea/
