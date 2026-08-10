@@ -12,6 +12,7 @@ from collections import defaultdict
 
 import torch
 import numpy as np
+from torch.utils.tensorboard import SummaryWriter
 
 from models import create_model, get_supported_models
 from data import get_voc_loaders, VOC_CLASSES
@@ -286,6 +287,20 @@ def test(args):
 
     # 打印结果
     print_results(results)
+
+    # TensorBoard 记录测试结果
+    log_dir = os.path.join('logs', f'{model_name}_test')
+    writer = SummaryWriter(log_dir)
+
+    # 记录 mAP
+    writer.add_scalar('mAP/mAP@0.5', results['mAP'], 0)
+
+    # 记录每个类别的 AP
+    for class_name, ap in results['per_class_ap'].items():
+        writer.add_scalar(f'AP/{class_name}', ap, 0)
+
+    writer.close()
+    print(f"[TensorBoard] 测试结果已记录到: {log_dir}")
 
     # 保存结果
     result_path = os.path.join('results', f'{model_name}_test_results.json')

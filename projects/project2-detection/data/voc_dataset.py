@@ -96,13 +96,21 @@ class VOCDetectionWrapper(VOCDetection):
         return img, target
 
 
-def get_detection_transforms(train=True):
+def get_detection_transforms(train=True, resize=None):
     """
     获取检测任务的数据变换
+
+    Args:
+        train: 是否是训练模式
+        resize: 图像尺寸（用于 DETR 等需要固定尺寸的模型）
 
     注意：检测任务的变换需要同时处理图像和边界框
     """
     transforms = []
+
+    # 如果指定了 resize，先调整图像大小
+    if resize is not None:
+        transforms.append(T.Resize((resize, resize)))
 
     # 基础变换：ToTensor（同时处理 target 中的 boxes）
     transforms.append(T.ToTensor())
@@ -138,6 +146,7 @@ def get_voc_loaders(
     num_workers=2,
     subset_size=None,
     download=False,
+    resize=None,
 ):
     """
     获取 VOC 2007 训练和验证数据加载器
@@ -149,12 +158,13 @@ def get_voc_loaders(
         num_workers: 数据加载线程数
         subset_size: 子集大小（None 使用全部数据）
         download: 是否自动下载
+        resize: 图像尺寸（用于 DETR 等需要固定尺寸的模型）
 
     Returns:
         (train_loader, val_loader, test_loader)
     """
-    transform_train = get_detection_transforms(train=True)
-    transform_val = get_detection_transforms(train=False)
+    transform_train = get_detection_transforms(train=True, resize=resize)
+    transform_val = get_detection_transforms(train=False, resize=resize)
 
     # 创建数据集
     print(f"[数据] 加载 VOC {year} 数据集...")

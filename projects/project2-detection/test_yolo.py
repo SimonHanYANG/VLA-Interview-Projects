@@ -22,12 +22,22 @@ def test(args):
     print("=" * 60)
 
     # 加载训练好的模型
-    model_path = f'runs/train/yolov5{args.model}_voc/weights/best.pt'
+    model_path = f'runs/detect/runs/train/yolov5{args.model}_voc/weights/best.pt'
 
     if not os.path.exists(model_path):
-        print(f"[错误] 未找到训练好的模型: {model_path}")
-        print(f"[提示] 请先运行训练: python train_yolo.py --model {args.model} --epochs 20")
-        return None
+        # 尝试其他路径
+        alt_paths = [
+            f'runs/train/yolov5{args.model}_voc/weights/best.pt',
+            f'runs/detect/train/yolov5{args.model}_voc/weights/best.pt',
+        ]
+        for alt_path in alt_paths:
+            if os.path.exists(alt_path):
+                model_path = alt_path
+                break
+        else:
+            print(f"[错误] 未找到训练好的模型: {model_path}")
+            print(f"[提示] 请先运行训练: python train_yolo.py --model {args.model} --epochs 20")
+            return None
 
     print(f"[模型] 加载权重: {model_path}")
     model = YOLO(model_path)

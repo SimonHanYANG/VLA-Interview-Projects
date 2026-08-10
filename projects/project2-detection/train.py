@@ -14,8 +14,9 @@ from datetime import datetime
 import torch
 import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR
+from torch.utils.tensorboard import SummaryWriter
 
-from models import create_model, get_supported_models, is_detr_model
+from models import create_model, get_supported_models, is_detr_model, is_yolo_model
 from data import get_voc_loaders
 
 
@@ -145,6 +146,11 @@ def train(args):
     os.makedirs('results', exist_ok=True)
     os.makedirs('logs', exist_ok=True)
 
+    # TensorBoard
+    log_dir = os.path.join('logs', f'{model_name}_{datetime.now().strftime("%Y%m%d_%H%M%S")}')
+    writer = SummaryWriter(log_dir)
+    print(f"[TensorBoard] 日志目录: {log_dir}")
+
     # ============================================================
     # 2. 设备选择（优先 CUDA）
     # ============================================================
@@ -163,12 +169,16 @@ def train(args):
     print(f"\n[数据] 加载 VOC 2007 数据集...")
     data_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 
+    # DETR 需要固定尺寸的图像
+    resize = 800 if is_detr_model(model_name) else None
+
     train_loader, val_loader, _ = get_voc_loaders(
         data_root=data_root,
         batch_size=batch_size,
         num_workers=num_workers,
         subset_size=subset_size,
         download=False,
+        resize=resize,
     )
 
     # ============================================================
@@ -233,6 +243,12 @@ def train(args):
               f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | "
               f"LR: {current_lr:.6f} | Time: {epoch_time:.1f}s")
 
+        # TensorBoard 记录
+        writer.add_scalar('Loss/train', train_loss, epoch)
+        writer.add_scalar('Loss/val', val_loss, epoch)
+        writer.add_scalar('LR', current_lr, epoch)
+        writer.add_scalar('Time/epoch', epoch_time, epoch)
+
         # --- 保存最佳模型 ---
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -268,6 +284,9 @@ def train(args):
         'val_loss': val_loss,
     }, final_path)
 
+    # 关闭 TensorBoard writer
+    writer.close()
+
     print("\n" + "=" * 60)
     print(f"  训练完成！")
     print(f"  模型:        {model_name}")
@@ -276,6 +295,7 @@ def train(args):
     print(f"  最终模型:    {final_path}")
     print(f"  最佳模型:    models/{model_name}_best.pth")
     print(f"  训练历史:    {history_path}")
+    print(f"  TensorBoard: tensorboard --logdir {log_dir}")
     print("=" * 60)
 
     return history

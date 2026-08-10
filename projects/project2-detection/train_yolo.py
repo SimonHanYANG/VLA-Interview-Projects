@@ -29,14 +29,16 @@ def prepare_voc_dataset(data_root='./data'):
         'pottedplant', 'sheep', 'sofa', 'train', 'tvmonitor',
     ]
 
+    voc_root = os.path.join(os.path.abspath(data_root), 'VOCdevkit', 'VOC2007')
+
     # 创建数据集配置文件
     config_content = f"""# VOC 2007 Dataset Configuration for YOLOv5
 # 用法: python train_yolo.py --data voc.yaml
 
-path: {os.path.abspath(data_root)}/VOCdevkit/VOC2007  # 数据集根目录
-train: ImageSets/Main/train.txt  # 训练集文件列表
-val: ImageSets/Main/val.txt  # 验证集文件列表
-test: ImageSets/Main/test.txt  # 测试集文件列表（可选）
+path: {voc_root}  # 数据集根目录
+train: train.txt  # 训练集文件列表
+val: val.txt  # 验证集文件列表
+test: test.txt  # 测试集文件列表（可选）
 
 # 类别数量
 nc: {len(voc_classes)}
@@ -132,20 +134,27 @@ def convert_voc_to_yolo(data_root='./data'):
 
     print(f"[数据] 转换完成: {converted} 个标注文件")
 
-    # 更新 ImageSets 文件，添加标签路径
+    # 创建 YOLO 格式的数据集文件（包含完整路径）
     for split in ['train', 'val', 'test']:
         src_file = voc_root / 'ImageSets' / 'Main' / f'{split}.txt'
         if src_file.exists():
-            # 创建 labels 目录的链接
+            # 创建 YOLO 格式的数据集文件
             dst_file = voc_root / f'{split}.txt'
             with open(src_file, 'r') as f:
                 image_ids = f.read().strip().split('\n')
 
             with open(dst_file, 'w') as f:
                 for img_id in image_ids:
-                    img_path = voc_root / 'JPEGImages' / f'{img_id}.jpg'
-                    if img_path.exists():
-                        f.write(f'{img_path.absolute()}\n')
+                    img_path = voc_root / 'images' / f'{img_id}.jpg'
+                    if (voc_root / 'JPEGImages' / f'{img_id}.jpg').exists():
+                        # 创建 images 目录的符号链接
+                        images_dir = voc_root / 'images'
+                        images_dir.mkdir(exist_ok=True)
+                        src_img = voc_root / 'JPEGImages' / f'{img_id}.jpg'
+                        dst_img = images_dir / f'{img_id}.jpg'
+                        if not dst_img.exists():
+                            dst_img.symlink_to(src_img.absolute())
+                        f.write(f'{dst_img.absolute()}\n')
 
             print(f"[数据] {split} 集: {len(image_ids)} 张图像")
 
@@ -206,13 +215,6 @@ def train(args):
         warmup_bias_lr=0.1,
         box=0.05,
         cls=0.5,
-        cls_pw=1.0,
-        obj=1.0,
-        obj_pw=1.0,
-        iou_t=0.2,
-        anchor_t=4.0,
-        fl_gamma=0.0,
-        label_smoothing=0.0,
         nbs=64,
         hsv_h=0.015,
         hsv_s=0.7,
