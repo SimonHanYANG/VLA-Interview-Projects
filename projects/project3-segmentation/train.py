@@ -301,7 +301,7 @@ def main():
                        help="Model to train")
     parser.add_argument("--epochs", type=int, default=10,
                        help="Number of training epochs")
-    parser.add_argument("--batch_size", type=int, default=8,
+    parser.add_argument("--batch_size", type=int, default=4,
                        help="Batch size")
     parser.add_argument("--lr", type=float, default=1e-4,
                        help="Learning rate")
@@ -309,6 +309,10 @@ def main():
                        help="Subset ratio for quick training")
     parser.add_argument("--data_root", type=str, default="./data",
                        help="Data root directory")
+    parser.add_argument("--num_workers", type=int, default=0,
+                       help="Number of data loading workers (0 for Windows)")
+    parser.add_argument("--image_size", type=int, default=320,
+                       help="Image size for training")
 
     args = parser.parse_args()
 
@@ -319,6 +323,8 @@ def main():
         learning_rate=args.lr,
         subset_ratio=args.subset_ratio,
         data_root=args.data_root,
+        num_workers=args.num_workers,
+        image_size=(args.image_size, args.image_size),
         models=[args.model],
     )
 
