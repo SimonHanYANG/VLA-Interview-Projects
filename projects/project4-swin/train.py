@@ -44,19 +44,19 @@ import numpy as np
 SWIN_CONFIGS = {
     'swin_tiny': {
         'model_name': 'swin_tiny_patch4_window7_224',
-        'default_lr': 0.001,
+        'default_lr': 0.0003,
         'default_batch_size': 64,
         'desc': 'Swin-Tiny (28M params, ImageNet 81.3%)'
     },
     'swin_small': {
         'model_name': 'swin_small_patch4_window7_224',
-        'default_lr': 0.001,
+        'default_lr': 0.0003,
         'default_batch_size': 64,
         'desc': 'Swin-Small (50M params, ImageNet 83.0%)'
     },
     'swin_base': {
         'model_name': 'swin_base_patch4_window7_224',
-        'default_lr': 0.0005,
+        'default_lr': 0.0002,
         'default_batch_size': 32,
         'desc': 'Swin-Base (88M params, ImageNet 83.5%)'
     }
@@ -128,31 +128,13 @@ def create_model(model_name='swin_tiny', num_classes=10, pretrained=True):
     config = SWIN_CONFIGS[model_name]
     timm_model_name = config['model_name']
 
-    # 尝试加载预训练权重，如果网络不可用则从头训练
-    if pretrained:
-        print(f"正在尝试加载预训练的 {config['desc']} 模型...")
-        try:
-            model = timm.create_model(
-                timm_model_name,
-                pretrained=True,
-                num_classes=num_classes
-            )
-            print("✓ 预训练权重加载成功")
-        except Exception as e:
-            print(f"[警告] 无法加载预训练权重: {e}")
-            print("将从头开始训练...")
-            model = timm.create_model(
-                timm_model_name,
-                pretrained=False,
-                num_classes=num_classes
-            )
-    else:
-        print(f"创建 {config['desc']} 模型（从头训练）...")
-        model = timm.create_model(
-            timm_model_name,
-            pretrained=False,
-            num_classes=num_classes
-        )
+    # 由于网络限制，直接从头训练（不下载预训练权重）
+    print(f"创建 {config['desc']} 模型（从头训练）...")
+    model = timm.create_model(
+        timm_model_name,
+        pretrained=False,
+        num_classes=num_classes
+    )
 
     return model
 
