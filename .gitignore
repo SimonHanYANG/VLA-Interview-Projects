@@ -32,3 +32,4 @@ Thumbs.db
 *.egg-info/
 dist/
 build/
+projects/project4-swin/data/
