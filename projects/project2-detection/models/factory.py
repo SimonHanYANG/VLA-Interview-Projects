@@ -141,8 +141,9 @@ class DETRWrapper(nn.Module):
             boxes_cxcywh[:, 2] /= img_w  # w
             boxes_cxcywh[:, 3] /= img_h  # h
 
+            # DETR 使用 0-indexed 标签 (0-19)，VOC 使用 1-indexed (1-20)
             detr_targets.append({
-                'class_labels': labels.to(self._device),
+                'class_labels': (labels - 1).to(self._device),
                 'boxes': boxes_cxcywh.to(self._device),
             })
 
@@ -174,7 +175,7 @@ class DETRWrapper(nn.Module):
                 processed = self.processor.post_process_object_detection(
                     outputs,
                     target_sizes=target_sizes,
-                    threshold=0.5,
+                    threshold=0.5,  # 标准阈值
                 )[0]
 
                 # 转换为 xyxy 格式

@@ -21,23 +21,24 @@ def test(args):
     print("  YOLOv5 目标检测测试")
     print("=" * 60)
 
-    # 加载训练好的模型
-    model_path = f'runs/detect/runs/train/yolov5{args.model}_voc/weights/best.pt'
+    # 加载训练好的模型 - 搜索多个可能路径
+    possible_paths = [
+        f'runs/train/yolov5{args.model}_voc/weights/best.pt',
+        f'runs/detect/runs/train/yolov5{args.model}_voc/weights/best.pt',
+        f'runs/detect/train/yolov5{args.model}_voc/weights/best.pt',
+    ]
+    model_path = None
+    for p in possible_paths:
+        if os.path.exists(p):
+            model_path = p
+            break
 
-    if not os.path.exists(model_path):
-        # 尝试其他路径
-        alt_paths = [
-            f'runs/train/yolov5{args.model}_voc/weights/best.pt',
-            f'runs/detect/train/yolov5{args.model}_voc/weights/best.pt',
-        ]
-        for alt_path in alt_paths:
-            if os.path.exists(alt_path):
-                model_path = alt_path
-                break
-        else:
-            print(f"[错误] 未找到训练好的模型: {model_path}")
-            print(f"[提示] 请先运行训练: python train_yolo.py --model {args.model} --epochs 20")
-            return None
+    if model_path is None:
+        print(f"[错误] 未找到训练好的模型，尝试过的路径:")
+        for p in possible_paths:
+            print(f"  - {p}")
+        print(f"[提示] 请先运行训练: python train_yolo.py --model {args.model} --epochs 20")
+        return None
 
     print(f"[模型] 加载权重: {model_path}")
     model = YOLO(model_path)
@@ -71,15 +72,28 @@ def test(args):
     }
 
     # 每个类别的 AP
-    if hasattr(results.box, 'ap50_per_class'):
-        for i, ap in enumerate(results.box.ap50_per_class):
-            class_name = results.names[i] if i < len(results.names) else f'class_{i}'
-            test_results['per_class_ap50'][class_name] = float(ap)
+    # ultralytics >= 8.x: box.ap50 和 box.ap 是 per-class 列表
+    # box.ap_class_index 给出对应的类别索引
+    try:
+        ap50_values = results.box.ap50  # list of AP@0.5 per class
+        ap_values = results.box.ap      # list of AP@0.5:0.95 per class
+        class_indices = results.box.ap_class_index  # class indices
 
-    if hasattr(results.box, 'ap_per_class'):
-        for i, ap in enumerate(results.box.ap_per_class):
-            class_name = results.names[i] if i < len(results.names) else f'class_{i}'
-            test_results['per_class_ap50_95'][class_name] = float(ap)
+        for i, cls_idx in enumerate(class_indices):
+            class_name = results.names[int(cls_idx)] if int(cls_idx) in results.names else f'class_{cls_idx}'
+            if i < len(ap50_values):
+                test_results['per_class_ap50'][class_name] = float(ap50_values[i])
+            if i < len(ap_values):
+                test_results['per_class_ap50_95'][class_name] = float(ap_values[i])
+    except Exception as e:
+        print(f"[警告] 获取 per-class AP 失败: {e}")
+        # fallback: 尝试旧 API
+        for attr_name in ['ap50_per_class', 'ap_per_class']:
+            if hasattr(results.box, attr_name):
+                for i, ap in enumerate(getattr(results.box, attr_name)):
+                    class_name = results.names[i] if i in results.names else f'class_{i}'
+                    key = 'per_class_ap50' if '50' in attr_name else 'per_class_ap50_95'
+                    test_results[key][class_name] = float(ap)
 
     # 打印结果
     print("\n" + "=" * 70)

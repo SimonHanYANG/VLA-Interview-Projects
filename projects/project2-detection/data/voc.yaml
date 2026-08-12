@@ -1,0 +1,13 @@
+# VOC 2007 Dataset Configuration for YOLOv5
+# 用法: python train_yolo.py --data voc.yaml
+
+path: /root/VLA-Inter/projects/project2-detection/data/VOCdevkit/VOC2007  # 数据集根目录
+train: train.txt  # 训练集文件列表
+val: val.txt  # 验证集文件列表
+test: test.txt  # 测试集文件列表（可选）
+
+# 类别数量
+nc: 20
+
+# 类别名称
+names: ['aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car', 'cat', 'chair', 'cow', 'diningtable', 'dog', 'horse', 'motorbike', 'person', 'pottedplant', 'sheep', 'sofa', 'train', 'tvmonitor']
