@@ -4,7 +4,6 @@ data/
 *.zip
 
 # 模型权重
-models/
 *.pth
 *.pt
 *.ckpt
