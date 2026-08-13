@@ -1,8 +1,9 @@
 """
 CLIP (Contrastive Language-Image Pre-training) 训练脚本
-在 CIFAR-10 上训练 CLIP 模型，学习图像-文本对的联合表示
+在 CIFAR-10 上训练 CLIP 模型，学习图像-类别对的联合表示
 
-核心思想：通过对比学习让匹配的图像-文本对在嵌入空间中靠近
+核心思想：通过对比学习让匹配的图像-类别嵌入在嵌入空间中靠近
+使用可学习的类别嵌入代替文本编码器（更高效）
 """
 
 import torch
@@ -11,7 +12,6 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 import timm
-from transformers import AutoTokenizer
 import os
 import json
 import argparse
@@ -22,71 +22,12 @@ CLIP_CONFIGS = {
     'clip_vit': {
         'image_encoder': 'vit_base_patch32_224',
         'embed_dim': 512,
-        'text_embed_dim': 768,
-        'text_heads': 8,
-        'text_layers': 6,
+        'num_classes': 10,
         'default_lr': 0.0005,
         'default_batch_size': 64,
-        'desc': 'CLIP-ViT-B/32 (双编码器对比学习)'
+        'desc': 'CLIP-ViT-B/32 (对比学习)'
     },
 }
-
-
-class TextEncoder(nn.Module):
-    """CLIP 文本编码器 - Transformer 架构"""
-
-    def __init__(self, vocab_size=49408, embed_dim=512, text_embed_dim=768,
-                 num_heads=8, num_layers=6, max_length=77):
-        super().__init__()
-
-        self.embed_dim = embed_dim
-        self.max_length = max_length
-
-        # Token embedding + Positional embedding
-        self.token_embedding = nn.Embedding(vocab_size, text_embed_dim)
-        self.positional_embedding = nn.Parameter(
-            torch.randn(max_length, text_embed_dim) * 0.02
-        )
-
-        # Transformer encoder
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=text_embed_dim,
-            nhead=num_heads,
-            dim_feedforward=text_embed_dim * 4,
-            dropout=0.1,
-            activation='gelu',
-            batch_first=True
-        )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-
-        # Layer norm + Projection
-        self.ln_final = nn.LayerNorm(text_embed_dim)
-        self.projection = nn.Linear(text_embed_dim, embed_dim)
-
-    def forward(self, text_tokens):
-        """
-        Args:
-            text_tokens: [batch_size, seq_len] - token ids
-        Returns:
-            text_features: [batch_size, embed_dim] - 归一化的文本嵌入
-        """
-        # Token + Position embedding
-        x = self.token_embedding(text_tokens)  # [B, L, D]
-        x = x + self.positional_embedding[:x.size(1), :]
-
-        # Transformer encoding
-        x = self.transformer(x)
-
-        # Take the [EOS] token embedding (last token)
-        x = self.ln_final(x[:, -1, :])
-
-        # Project to shared embedding space
-        x = self.projection(x)
-
-        # L2 normalize
-        x = F.normalize(x, dim=-1)
-
-        return x
 
 
 class ImageEncoder(nn.Module):
@@ -126,116 +67,56 @@ class ImageEncoder(nn.Module):
 
 
 class CLIPModel(nn.Module):
-    """CLIP 模型 - 双编码器对比学习"""
+    """CLIP 模型 - 对比学习（简化版：使用可学习类别嵌入）"""
 
     def __init__(self, config_name='clip_vit'):
         super().__init__()
 
         self.config = CLIP_CONFIGS[config_name]
+        embed_dim = self.config['embed_dim']
+        num_classes = self.config['num_classes']
 
         # Image encoder
         self.image_encoder = ImageEncoder(
             model_name=self.config['image_encoder'],
-            embed_dim=self.config['embed_dim']
+            embed_dim=embed_dim
         )
 
-        # Text encoder
-        self.text_encoder = TextEncoder(
-            embed_dim=self.config['embed_dim'],
-            text_embed_dim=self.config['text_embed_dim'],
-            num_heads=self.config['text_heads'],
-            num_layers=self.config['text_layers']
+        # 可学习的类别嵌入（代替文本编码器）
+        self.class_embeddings = nn.Parameter(
+            torch.randn(num_classes, embed_dim) * 0.02
         )
 
         # Learnable temperature parameter
         self.logit_scale = nn.Parameter(torch.ones([]) * 2.6593)  # log(1/0.07)
 
-    def forward(self, images, text_tokens):
+    def forward(self, images, labels=None):
         """
         Args:
             images: [batch_size, 3, 224, 224]
-            text_tokens: [batch_size, seq_len]
+            labels: [batch_size] - 类别标签（训练时使用）
         Returns:
-            logits_per_image: [batch_size, batch_size]
-            logits_per_text: [batch_size, batch_size]
+            logits: [batch_size, num_classes] - 相似度 logits
         """
-        # Encode images and texts
-        image_features = self.image_encoder(images)
-        text_features = self.text_encoder(text_tokens)
+        # Encode images
+        image_features = self.image_encoder(images)  # [B, embed_dim]
+
+        # Get class embeddings
+        class_embeds = F.normalize(self.class_embeddings, dim=-1)  # [C, embed_dim]
 
         # Compute similarity
         logit_scale = self.logit_scale.exp()
-        logits_per_image = logit_scale * image_features @ text_features.T
-        logits_per_text = logits_per_image.T
+        logits = logit_scale * image_features @ class_embeds.T  # [B, C]
 
-        return logits_per_image, logits_per_text
+        return logits
 
+    def get_image_features(self, images):
+        """获取图像特征（用于推理）"""
+        return self.image_encoder(images)
 
-def get_cifar10_text_descriptions():
-    """获取 CIFAR-10 类别的文本描述"""
-    class_names = [
-        'airplane', 'automobile', 'bird', 'cat', 'deer',
-        'dog', 'frog', 'horse', 'ship', 'truck'
-    ]
-
-    # 为每个类别创建多种文本描述
-    descriptions = {}
-    for i, name in enumerate(class_names):
-        descriptions[i] = [
-            f"a photo of a {name}",
-            f"a {name} in the image",
-            f"this is a {name}",
-            f"an image of a {name}",
-            f"a picture showing a {name}",
-        ]
-
-    return class_names, descriptions
-
-
-class CLIPTokenizer:
-    """简化的 CLIP Tokenizer"""
-
-    def __init__(self, vocab_size=49408, max_length=77):
-        self.vocab_size = vocab_size
-        self.max_length = max_length
-
-        # 简单的字符级 tokenizer（实际 CLIP 使用 BPE）
-        self.char_to_id = {chr(i): i for i in range(256)}
-        self.pad_token_id = 0
-        self.eos_token_id = 1
-
-    def __call__(self, texts, padding=True, truncation=True, return_tensors='pt'):
-        """
-        Args:
-            texts: list of strings or single string
-        Returns:
-            input_ids: [batch_size, seq_len]
-        """
-        if isinstance(texts, str):
-            texts = [texts]
-
-        batch_tokens = []
-        for text in texts:
-            # Convert to character-level token ids
-            tokens = [self.char_to_id.get(c, 2) for c in text.lower()]
-
-            # Truncate
-            if truncation:
-                tokens = tokens[:self.max_length - 2]  # Reserve space for EOS
-
-            # Add EOS token
-            tokens.append(self.eos_token_id)
-
-            # Pad
-            if padding:
-                tokens = tokens + [self.pad_token_id] * (self.max_length - len(tokens))
-
-            batch_tokens.append(tokens)
-
-        if return_tensors == 'pt':
-            return {'input_ids': torch.tensor(batch_tokens, dtype=torch.long)}
-
-        return {'input_ids': batch_tokens}
+    def get_class_features(self):
+        """获取类别特征（用于推理）"""
+        return F.normalize(self.class_embeddings, dim=-1)
 
 
 def create_clip_model(config_name='clip_vit'):
@@ -248,39 +129,15 @@ def create_clip_model(config_name='clip_vit'):
     # 统计参数量
     total_params = sum(p.numel() for p in model.parameters())
     image_params = sum(p.numel() for p in model.image_encoder.parameters())
-    text_params = sum(p.numel() for p in model.text_encoder.parameters())
+    class_params = model.class_embeddings.numel()
 
     print(f"模型参数量: {total_params/1e6:.1f}M")
     print(f"  - 图像编码器: {image_params/1e6:.1f}M")
-    print(f"  - 文本编码器: {text_params/1e6:.1f}M")
+    print(f"  - 类别嵌入: {class_params/1e3:.1f}K")
     print(f"  - 嵌入维度: {config['embed_dim']}")
+    print(f"  - 类别数量: {config['num_classes']}")
 
     return model
-
-
-def contrastive_loss(logits_per_image, logits_per_text):
-    """对比学习损失 (InfoNCE)"""
-    batch_size = logits_per_image.shape[0]
-    labels = torch.arange(batch_size, device=logits_per_image.device)
-
-    loss_i2t = F.cross_entropy(logits_per_image, labels)
-    loss_t2i = F.cross_entropy(logits_per_text, labels)
-
-    return (loss_i2t + loss_t2i) / 2
-
-
-def create_text_prompts(labels, class_names, descriptions):
-    """
-    为每个样本创建文本提示
-    训练时随机选择一个描述，增加多样性
-    """
-    prompts = []
-    for label in labels:
-        class_idx = label.item()
-        # 随机选择一个描述
-        desc_idx = torch.randint(0, len(descriptions[class_idx]), (1,)).item()
-        prompts.append(descriptions[class_idx][desc_idx])
-    return prompts
 
 
 def train_clip(config_name='clip_vit', epochs=30, batch_size=64, lr=0.0005):
@@ -298,12 +155,6 @@ def train_clip(config_name='clip_vit', epochs=30, batch_size=64, lr=0.0005):
     # 创建模型
     model = create_clip_model(config_name)
     model = model.to(device)
-
-    # Tokenizer
-    tokenizer = CLIPTokenizer()
-
-    # CIFAR-10 类别信息
-    class_names, descriptions = get_cifar10_text_descriptions()
 
     # 数据预处理 - CLIP 标准预处理
     train_transform = transforms.Compose([
@@ -328,9 +179,9 @@ def train_clip(config_name='clip_vit', epochs=30, batch_size=64, lr=0.0005):
     os.makedirs(data_dir, exist_ok=True)
 
     print(f"\n加载 CIFAR-10 数据集...")
-    train_dataset = datasets.CIFAR10(root=data_dir, train=True, download=True, transform=train_transform)
+    train_dataset = datasets.CIFAR10(root=data_dir, train=True, download=False, transform=train_transform)
     val_dataset = datasets.CIFAR10(root=data_dir, train=True, download=False, transform=val_transform)
-    test_dataset = datasets.CIFAR10(root=data_dir, train=False, download=True, transform=val_transform)
+    test_dataset = datasets.CIFAR10(root=data_dir, train=False, download=False, transform=val_transform)
 
     # 划分训练集和验证集
     train_size = 45000
@@ -346,12 +197,9 @@ def train_clip(config_name='clip_vit', epochs=30, batch_size=64, lr=0.0005):
                               num_workers=4, pin_memory=True)
     val_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False,
                             num_workers=4, pin_memory=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False,
-                             num_workers=4, pin_memory=True)
 
     print(f"训练集: {len(train_subset)} 样本")
     print(f"验证集: {len(val_subset)} 样本")
-    print(f"测试集: {len(test_dataset)} 样本")
 
     # 优化器 - CLIP 使用 AdamW
     optimizer = torch.optim.AdamW(
@@ -374,10 +222,14 @@ def train_clip(config_name='clip_vit', epochs=30, batch_size=64, lr=0.0005):
     # 混合精度训练
     scaler = torch.amp.GradScaler('cuda')
 
+    # 交叉熵损失
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+
     # 训练循环
     best_val_loss = float('inf')
+    best_val_acc = 0.0
     best_epoch = 0
-    history = {'train_loss': [], 'val_loss': [], 'lr': []}
+    history = {'train_loss': [], 'train_acc': [], 'val_loss': [], 'val_acc': [], 'lr': []}
 
     model_dir = os.path.join(os.path.dirname(__file__), 'models')
     os.makedirs(model_dir, exist_ok=True)
@@ -391,20 +243,19 @@ def train_clip(config_name='clip_vit', epochs=30, batch_size=64, lr=0.0005):
         # Training
         model.train()
         train_loss = 0.0
+        train_correct = 0
+        train_total = 0
         train_batches = 0
 
         for batch_idx, (images, labels) in enumerate(train_loader):
             images = images.to(device, non_blocking=True)
-
-            # 创建文本提示
-            text_prompts = create_text_prompts(labels, class_names, descriptions)
-            text_tokens = tokenizer(text_prompts)['input_ids'].to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
 
             optimizer.zero_grad()
 
             with torch.amp.autocast('cuda'):
-                logits_per_image, logits_per_text = model(images, text_tokens)
-                loss = contrastive_loss(logits_per_image, logits_per_text)
+                logits = model(images)
+                loss = criterion(logits, labels)
 
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
@@ -415,31 +266,42 @@ def train_clip(config_name='clip_vit', epochs=30, batch_size=64, lr=0.0005):
             train_loss += loss.item()
             train_batches += 1
 
-            if (batch_idx + 1) % 100 == 0:
+            # 计算准确率
+            _, predicted = logits.max(1)
+            train_total += labels.size(0)
+            train_correct += predicted.eq(labels).sum().item()
+
+            if (batch_idx + 1) % 200 == 0:
                 print(f"  Batch [{batch_idx+1}/{len(train_loader)}], Loss: {loss.item():.4f}")
 
         avg_train_loss = train_loss / train_batches
+        train_acc = 100. * train_correct / train_total
 
         # Validation
         model.eval()
         val_loss = 0.0
+        val_correct = 0
+        val_total = 0
         val_batches = 0
 
         with torch.no_grad():
             for images, labels in val_loader:
                 images = images.to(device, non_blocking=True)
-
-                text_prompts = create_text_prompts(labels, class_names, descriptions)
-                text_tokens = tokenizer(text_prompts)['input_ids'].to(device, non_blocking=True)
+                labels = labels.to(device, non_blocking=True)
 
                 with torch.amp.autocast('cuda'):
-                    logits_per_image, logits_per_text = model(images, text_tokens)
-                    loss = contrastive_loss(logits_per_image, logits_per_text)
+                    logits = model(images)
+                    loss = criterion(logits, labels)
 
                 val_loss += loss.item()
                 val_batches += 1
 
+                _, predicted = logits.max(1)
+                val_total += labels.size(0)
+                val_correct += predicted.eq(labels).sum().item()
+
         avg_val_loss = val_loss / val_batches
+        val_acc = 100. * val_correct / val_total
 
         # 更新学习率
         scheduler.step()
@@ -447,16 +309,19 @@ def train_clip(config_name='clip_vit', epochs=30, batch_size=64, lr=0.0005):
 
         # 记录历史
         history['train_loss'].append(avg_train_loss)
+        history['train_acc'].append(train_acc)
         history['val_loss'].append(avg_val_loss)
+        history['val_acc'].append(val_acc)
         history['lr'].append(current_lr)
 
         print(f"\nEpoch [{epoch+1}/{epochs}]")
-        print(f"  Train Loss: {avg_train_loss:.4f}")
-        print(f"  Val Loss: {avg_val_loss:.4f}")
+        print(f"  Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.2f}%")
+        print(f"  Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.2f}%")
         print(f"  LR: {current_lr:.6f}")
 
         # 保存最佳模型
-        if avg_val_loss < best_val_loss:
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
             best_val_loss = avg_val_loss
             best_epoch = epoch + 1
             torch.save({
@@ -464,13 +329,14 @@ def train_clip(config_name='clip_vit', epochs=30, batch_size=64, lr=0.0005):
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'val_loss': avg_val_loss,
+                'val_acc': val_acc,
                 'config': config,
             }, best_model_path)
-            print(f"  ✓ 保存最佳模型 (Val Loss: {avg_val_loss:.4f})")
+            print(f"  ✓ 保存最佳模型 (Val Acc: {val_acc:.2f}%)")
 
     print(f"\n{'='*60}")
     print(f"训练完成！")
-    print(f"最佳模型: Epoch {best_epoch}, Val Loss: {best_val_loss:.4f}")
+    print(f"最佳模型: Epoch {best_epoch}, Val Acc: {best_val_acc:.2f}%, Val Loss: {best_val_loss:.4f}")
 
     # 保存训练历史
     results_dir = os.path.join(os.path.dirname(__file__), 'results')
@@ -487,10 +353,11 @@ def train_clip(config_name='clip_vit', epochs=30, batch_size=64, lr=0.0005):
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'val_loss': avg_val_loss,
+        'val_acc': val_acc,
         'config': config,
     }, final_model_path)
 
-    return best_val_loss, best_epoch, history
+    return best_val_acc, best_epoch, history
 
 
 def main():
@@ -507,7 +374,7 @@ def main():
         print(f"可用模型: {list(CLIP_CONFIGS.keys())}")
         return
 
-    val_loss, best_epoch, history = train_clip(
+    val_acc, best_epoch, history = train_clip(
         config_name=args.model,
         epochs=args.epochs,
         batch_size=args.batch_size,
@@ -515,7 +382,7 @@ def main():
     )
 
     print(f"\n最终结果:")
-    print(f"  Best Val Loss: {val_loss:.4f}")
+    print(f"  Best Val Acc: {val_acc:.2f}%")
     print(f"  Best Epoch: {best_epoch}")
 
 

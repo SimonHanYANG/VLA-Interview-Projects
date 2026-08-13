@@ -1,10 +1,10 @@
 """
 CLIP 模型测试脚本
-使用零样本分类评估 CLIP 模型在 CIFAR-10 上的性能
+评估 CLIP 模型在 CIFAR-10 测试集上的分类性能
 
-评估方式：零样本分类 (Zero-shot Classification)
-1. 为每个类别创建文本嵌入
-2. 计算图像嵌入与所有类别文本嵌入的相似度
+评估方式：直接分类
+1. 提取图像特征
+2. 计算与类别嵌入的相似度
 3. 选择相似度最高的类别作为预测
 """
 
@@ -22,7 +22,7 @@ import json
 import argparse
 from tqdm import tqdm
 
-from train import create_clip_model, CLIP_CONFIGS, CLIPTokenizer, get_cifar10_text_descriptions
+from train import create_clip_model, CLIP_CONFIGS
 
 
 def load_clip_model(config_name, weights_path):
@@ -35,62 +35,9 @@ def load_clip_model(config_name, weights_path):
     model.load_state_dict(checkpoint['model_state_dict'])
 
     print(f"模型来自 Epoch {checkpoint.get('epoch', 'unknown')}")
-    print(f"Val Loss: {checkpoint.get('val_loss', 'unknown'):.4f}")
+    print(f"Val Acc: {checkpoint.get('val_acc', 'unknown'):.2f}%")
 
     return model
-
-
-def create_class_text_embeddings(model, tokenizer, class_names, descriptions, device):
-    """
-    为每个类别创建文本嵌入
-    使用每个类别的多个描述，取平均嵌入
-    """
-    model.eval()
-    class_embeddings = {}
-
-    with torch.no_grad():
-        for class_idx, name in enumerate(class_names):
-            # 获取该类别的所有描述
-            class_descriptions = descriptions[class_idx]
-
-            # 编码所有描述
-            text_tokens = tokenizer(class_descriptions)['input_ids'].to(device)
-            text_features = model.text_encoder(text_tokens)  # [num_descriptions, embed_dim]
-
-            # 取平均嵌入
-            class_embeddings[class_idx] = text_features.mean(dim=0, keepdim=True)  # [1, embed_dim]
-
-    # Stack all class embeddings
-    all_embeddings = torch.cat([class_embeddings[i] for i in range(len(class_names))], dim=0)
-    all_embeddings = F.normalize(all_embeddings, dim=-1)
-
-    return all_embeddings
-
-
-def zero_shot_classify(model, images, class_text_embeddings):
-    """
-    零样本分类
-    Args:
-        model: CLIP 模型
-        images: [batch_size, 3, 224, 224]
-        class_text_embeddings: [num_classes, embed_dim]
-    Returns:
-        predictions: [batch_size]
-        similarities: [batch_size, num_classes]
-    """
-    model.eval()
-    with torch.no_grad():
-        # 编码图像
-        image_features = model.image_encoder(images)  # [B, embed_dim]
-
-        # 计算相似度
-        logit_scale = model.logit_scale.exp()
-        similarities = logit_scale * image_features @ class_text_embeddings.T  # [B, num_classes]
-
-        # 获取预测
-        predictions = similarities.argmax(dim=-1)
-
-    return predictions, similarities
 
 
 def evaluate_clip(config_name='clip_vit', weights_path=None, batch_size=64):
@@ -118,18 +65,11 @@ def evaluate_clip(config_name='clip_vit', weights_path=None, batch_size=64):
     model = model.to(device)
     model.eval()
 
-    # Tokenizer
-    tokenizer = CLIPTokenizer()
-
-    # CIFAR-10 类别信息
-    class_names, descriptions = get_cifar10_text_descriptions()
-
-    # 创建类别文本嵌入
-    print("\n创建类别文本嵌入...")
-    class_text_embeddings = create_class_text_embeddings(
-        model, tokenizer, class_names, descriptions, device
-    )
-    print(f"类别嵌入形状: {class_text_embeddings.shape}")
+    # CIFAR-10 类别名称
+    class_names = [
+        'airplane', 'automobile', 'bird', 'cat', 'deer',
+        'dog', 'frog', 'horse', 'ship', 'truck'
+    ]
 
     # 数据预处理
     test_transform = transforms.Compose([
@@ -141,14 +81,14 @@ def evaluate_clip(config_name='clip_vit', weights_path=None, batch_size=64):
 
     # 加载测试集
     data_dir = os.path.join(os.path.dirname(__file__), 'data')
-    test_dataset = datasets.CIFAR10(root=data_dir, train=False, download=True, transform=test_transform)
+    test_dataset = datasets.CIFAR10(root=data_dir, train=False, download=False, transform=test_transform)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False,
                              num_workers=4, pin_memory=True)
 
     print(f"\n测试集: {len(test_dataset)} 样本")
 
-    # 零样本分类评估
-    print("\n进行零样本分类...")
+    # 评估
+    print("\n进行评估...")
     all_predictions = []
     all_labels = []
 
@@ -156,7 +96,8 @@ def evaluate_clip(config_name='clip_vit', weights_path=None, batch_size=64):
         for images, labels in tqdm(test_loader, desc="评估"):
             images = images.to(device, non_blocking=True)
 
-            predictions, _ = zero_shot_classify(model, images, class_text_embeddings)
+            logits = model(images)
+            predictions = logits.argmax(dim=-1)
 
             all_predictions.extend(predictions.cpu().numpy())
             all_labels.extend(labels.numpy())
@@ -195,7 +136,7 @@ def evaluate_clip(config_name='clip_vit', weights_path=None, batch_size=64):
     plt.figure(figsize=(12, 10))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
                 xticklabels=class_names, yticklabels=class_names)
-    plt.title(f'CLIP Zero-shot Classification\nAccuracy: {accuracy*100:.2f}%')
+    plt.title(f'CLIP Classification\nAccuracy: {accuracy*100:.2f}%')
     plt.xlabel('Predicted')
     plt.ylabel('True')
     plt.tight_layout()
@@ -209,7 +150,7 @@ def evaluate_clip(config_name='clip_vit', weights_path=None, batch_size=64):
     bars = plt.bar(range(len(class_names)), class_accuracies * 100)
     plt.xlabel('Class')
     plt.ylabel('Accuracy (%)')
-    plt.title('Per-class Accuracy - CLIP Zero-shot')
+    plt.title('Per-class Accuracy - CLIP')
     plt.xticks(range(len(class_names)), class_names, rotation=45)
     plt.ylim(0, 100)
 
