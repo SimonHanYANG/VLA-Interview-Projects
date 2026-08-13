@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
+from torch.utils.tensorboard import SummaryWriter
 import timm
 import os
 import json
@@ -235,6 +236,11 @@ def train_clip(config_name='clip_vit', epochs=30, batch_size=64, lr=0.0005):
     os.makedirs(model_dir, exist_ok=True)
     best_model_path = os.path.join(model_dir, f'{config_name}_best.pth')
 
+    # TensorBoard
+    log_dir = os.path.join(os.path.dirname(__file__), 'logs', f'{config_name}_{datetime.now().strftime("%Y%m%d_%H%M%S")}')
+    writer = SummaryWriter(log_dir)
+    print(f"TensorBoard 日志目录: {log_dir}")
+
     print(f"\n开始训练...")
     print(f"Epochs: {epochs}, Batch Size: {batch_size}, LR: {lr}")
     print(f"{'='*60}")
@@ -314,6 +320,14 @@ def train_clip(config_name='clip_vit', epochs=30, batch_size=64, lr=0.0005):
         history['val_acc'].append(val_acc)
         history['lr'].append(current_lr)
 
+        # TensorBoard 记录
+        writer.add_scalar('Loss/train', avg_train_loss, epoch + 1)
+        writer.add_scalar('Loss/val', avg_val_loss, epoch + 1)
+        writer.add_scalar('Accuracy/train', train_acc, epoch + 1)
+        writer.add_scalar('Accuracy/val', val_acc, epoch + 1)
+        writer.add_scalar('LR', current_lr, epoch + 1)
+        writer.flush()
+
         print(f"\nEpoch [{epoch+1}/{epochs}]")
         print(f"  Train Loss: {avg_train_loss:.4f}, Train Acc: {train_acc:.2f}%")
         print(f"  Val Loss: {avg_val_loss:.4f}, Val Acc: {val_acc:.2f}%")
@@ -356,6 +370,10 @@ def train_clip(config_name='clip_vit', epochs=30, batch_size=64, lr=0.0005):
         'val_acc': val_acc,
         'config': config,
     }, final_model_path)
+
+    # 关闭 TensorBoard writer
+    writer.close()
+    print(f"\nTensorBoard 日志已保存到: {log_dir}")
 
     return best_val_acc, best_epoch, history
 
