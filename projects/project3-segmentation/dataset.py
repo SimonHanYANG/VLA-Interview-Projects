@@ -4,6 +4,7 @@ Project 3: VOC 2012 数据集加载
 """
 
 import os
+import gc
 import random
 import numpy as np
 from PIL import Image
@@ -71,17 +72,21 @@ class VOCSegmentationDataset(Dataset):
         image = TF.resize(image, self.image_size, interpolation=T.InterpolationMode.BILINEAR)
         mask = TF.resize(mask, self.image_size, interpolation=T.InterpolationMode.NEAREST)
 
-        # 转换为 tensor
-        image = TF.to_tensor(image)
-        image = TF.normalize(image, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        # 转换为 tensor，立即释放 PIL 对象防止内存泄漏
+        image_tensor = TF.to_tensor(image)
+        del image
+        image_tensor = TF.normalize(image_tensor, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
         # mask 转为 long tensor
-        mask = torch.from_numpy(np.array(mask)).long()
+        mask_np = np.array(mask)
+        del mask
+        mask_tensor = torch.from_numpy(mask_np).long()
+        del mask_np
 
         # VOC 标注中 255 表示忽略的边界，映射到 0（背景）
-        mask[mask == 255] = 0
+        mask_tensor[mask_tensor == 255] = 0
 
-        return image, mask
+        return image_tensor, mask_tensor
 
     def _augment(self, image, mask):
         """数据增强：随机水平翻转"""

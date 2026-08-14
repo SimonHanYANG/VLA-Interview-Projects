@@ -4,6 +4,7 @@ Project 3: 图像分割统一训练脚本
 """
 
 import os
+import gc
 import sys
 import time
 import argparse
@@ -74,9 +75,12 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, epoch, writ
         all_preds.append(preds.cpu())
         all_targets.append(masks.cpu())
 
+        # 释放中间变量
+        del loss, preds, outputs
+
         # 打印进度
         if (batch_idx + 1) % 10 == 0:
-            print(f"  Batch [{batch_idx + 1}/{len(dataloader)}], Loss: {loss.item():.4f}")
+            print(f"  Batch [{batch_idx + 1}/{len(dataloader)}], Loss: {total_loss / (batch_idx + 1):.4f}")
 
     # 计算指标
     all_preds = torch.cat(all_preds, dim=0)
@@ -139,6 +143,9 @@ def validate(model, dataloader, criterion, device, epoch, writer=None):
             total_loss += loss.item()
             all_preds.append(preds.cpu())
             all_targets.append(masks.cpu())
+
+            # 释放中间变量
+            del loss, preds, outputs
 
     # 计算指标
     all_preds = torch.cat(all_preds, dim=0)
@@ -213,6 +220,11 @@ def train_model(model_name, config):
     for epoch in range(config.num_epochs):
         epoch_start_time = time.time()
 
+        # 每个 epoch 开始前清理内存
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         # 训练
         train_loss, train_miou, train_acc = train_one_epoch(
             model, train_loader, criterion, optimizer, device, epoch, writer
@@ -226,6 +238,11 @@ def train_model(model_name, config):
         # 更新学习率
         scheduler.step()
         current_lr = scheduler.get_last_lr()[0]
+
+        # 清理内存，防止 CPU 内存泄漏
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         # 记录历史
         train_losses.append(train_loss)
